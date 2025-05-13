@@ -9,7 +9,6 @@ except ImportError:
     whisper = None
 
 
-
 class AudioConverterApp(tk.Tk):
     def __init__(self):
         super().__init__()
