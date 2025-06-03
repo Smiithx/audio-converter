@@ -199,8 +199,16 @@ class AudioConverterApp(tk.Tk):
                         cmd = ["ffmpeg"] + options + ["-i", src, dest]
                         try:
                             subprocess.run(cmd, check=True)
+                        except FileNotFoundError:
+                            messagebox.showerror(
+                                "Error de ffmpeg",
+                                "FFmpeg no está instalado o no se encuentra en el PATH."
+                            )
+                            return
                         except subprocess.CalledProcessError as e:
-                            messagebox.showerror("Error de ffmpeg", f"Error al convertir '{src}':\n{e}")
+                            messagebox.showerror(
+                                "Error de ffmpeg", f"Error al convertir '{src}':\n{e}"
+                            )
                             return
                 messagebox.showinfo("Éxito", f"Conversión de carpeta completada:\n{out_path}")
             else:
@@ -210,9 +218,19 @@ class AudioConverterApp(tk.Tk):
                 cmd = ["ffmpeg"] + options + ["-i", in_path, out_path]
                 try:
                     subprocess.run(cmd, check=True)
-                    messagebox.showinfo("Éxito", f"Conversión completada:\n{out_path}")
+                    messagebox.showinfo(
+                        "Éxito", f"Conversión completada:\n{out_path}"
+                    )
+                except FileNotFoundError:
+                    messagebox.showerror(
+                        "Error de ffmpeg",
+                        "FFmpeg no está instalado o no se encuentra en el PATH."
+                    )
+                    return
                 except subprocess.CalledProcessError as e:
-                    messagebox.showerror("Error de ffmpeg", f"Ocurrió un error:\n{e}")
+                    messagebox.showerror(
+                        "Error de ffmpeg", f"Ocurrió un error:\n{e}"
+                    )
 
 
 if __name__ == "__main__":
