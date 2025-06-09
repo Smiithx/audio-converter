@@ -35,10 +35,8 @@ class AudioConverterApp(tk.Tk):
         self.ffmpeg_options = tk.StringVar(value="-y")
         self.output_ext = tk.StringVar(value=".mp3")
 
-        # Configuración de modelo Whisper
+        # Configuración de dispositivo para Whisper
         self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        # compute_type: usar FP16 en GPU, FP32 en CPU
-        self.compute_type = "float16" if self.device == "cuda" else "float32"
         self.model = None
 
         self._build_widgets()
@@ -176,7 +174,6 @@ class AudioConverterApp(tk.Tk):
     def audio_callback(self, indata, frames, time, status):
         if status:
             print(status)
-        # almacenar copia de datos
         self.recorded_frames.append(indata.copy())
 
     def start_recording(self):
@@ -187,7 +184,6 @@ class AudioConverterApp(tk.Tk):
             self.stream.start()
             self.recording = True
             self.btn_execute.config(text="Detener")
-            # animación de grabación
             self.progressbar.pack(fill='x', padx=10)
             self.progressbar.start(10)
         except Exception as e:
@@ -195,7 +191,6 @@ class AudioConverterApp(tk.Tk):
 
     def stop_recording_and_process(self):
         try:
-            # detener grabación
             self.stream.stop()
             self.stream.close()
             self.recording = False
@@ -203,24 +198,25 @@ class AudioConverterApp(tk.Tk):
             self.progressbar.stop()
             self.progressbar.pack_forget()
 
-            # combinar frames y guardar WAV temporal
+            # Guardar WAV temporal
             audio_data = np.concatenate(self.recorded_frames, axis=0)
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 wavfile.write(tmp.name, 16000, audio_data)
                 audio_path = tmp.name
 
-            # cargar modelo si es necesario
             if whisper is None:
                 messagebox.showerror("Error", "El paquete 'whisper' no está instalado.")
                 return
             if self.model is None:
-                self.model = whisper.load_model("base", device=self.device, compute_type=self.compute_type)
+                # Carga en GPU o CPU según disponibilidad
+                self.model = whisper.load_model("base", device=self.device)
+                # Si usamos GPU, pasar a half precision para aprovechar memoria
+                if self.device == "cuda":
+                    self.model.model.half()
 
-            # transcribir
             result = self.model.transcribe(audio_path)
             text = result.get("text", "")
 
-            # mostrar en UI
             self.txt_output.config(state="normal")
             self.txt_output.delete("1.0", "end")
             self.txt_output.insert("1.0", text)
@@ -248,7 +244,9 @@ class AudioConverterApp(tk.Tk):
 
         if mode == "transcribe":
             if self.model is None:
-                self.model = whisper.load_model("base", device=self.device, compute_type=self.compute_type)
+                self.model = whisper.load_model("base", device=self.device)
+                if self.device == "cuda":
+                    self.model.model.half()
             if self.process_folder.get():
                 if not os.path.isdir(in_path) or not os.path.isdir(out_path):
                     messagebox.showerror("Error", "Carpeta de entrada/salida inválida.")
@@ -261,9 +259,9 @@ class AudioConverterApp(tk.Tk):
                         base = os.path.splitext(file)[0]
                         dest = os.path.join(out_path, base + ".txt")
                         try:
-                            result = self.model.transcribe(src)
+                            res = self.model.transcribe(src)
                             with open(dest, "w", encoding="utf-8") as f:
-                                f.write(result["text"] or "")
+                                f.write(res.get("text", ""))
                         except Exception as e:
                             messagebox.showerror("Error de transcripción", f"No se pudo procesar '{src}':\n{e}")
                             return
@@ -275,9 +273,9 @@ class AudioConverterApp(tk.Tk):
                 base = os.path.splitext(os.path.basename(in_path))[0]
                 dest = out_path if out_path.lower().endswith(".txt") else out_path + ".txt"
                 try:
-                    result = self.model.transcribe(in_path)
+                    res = self.model.transcribe(in_path)
                     with open(dest, "w", encoding="utf-8") as f:
-                        f.write(result["text"] or "")
+                        f.write(res.get("text", ""))
                     messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
                 except Exception as e:
                     messagebox.showerror("Error de transcripción", f"No se pudo procesar el archivo:\n{e}")

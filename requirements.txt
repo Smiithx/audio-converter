@@ -1,8 +1,23 @@
-# Actualiza herramientas de build antes de compilar Whisper
+# Build tools (necesarios para compilar Whisper)
 setuptools>=78.1.1
 wheel>=0.38.4
-sounddevice
-scipy
 
-# Modelo de transcripción
-git+https://github.com/openai/whisper.git#egg=openai-whisper
+# Índice de PyTorch nightly con ruedas CUDA 11.8
+--find-links https://download.pytorch.org/whl/nightly/cu118/torch_stable.html
+
+# PyTorch, torchvision y torchaudio (nightly builds)
+# pip instalará las versiones más recientes compatibles con CUDA 11.8
+torch
+torchvision
+torchaudio
+
+# Dependencias de audio y procesamiento
+numpy~=2.2.6
+sounddevice~=0.5.2
+scipy~=1.15.3
+
+# Modelo Whisper
+openai-whisper @ git+https://github.com/openai/whisper.git#egg=openai-whisper
+
+# Herramientas de testing
+pytest
