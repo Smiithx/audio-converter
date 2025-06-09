@@ -1,6 +1,8 @@
 # Actualiza herramientas de build antes de compilar Whisper
-setuptools>=65.5.1
+setuptools>=78.1.1
 wheel>=0.38.4
+sounddevice
+scipy
 
 # Modelo de transcripción
 git+https://github.com/openai/whisper.git#egg=openai-whisper

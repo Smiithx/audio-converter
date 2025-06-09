@@ -1,77 +1,106 @@
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, ttk
 import subprocess
 import os
+import tempfile
 
 try:
     import whisper
 except ImportError:
     whisper = None
 
+# Dependencias para grabación por micrófono
+import sounddevice as sd
+import scipy.io.wavfile as wavfile
+import numpy as np
+import torch
 
 class AudioConverterApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Audio Converter & Transcriber")
-        self.geometry("600x350")
+        self.geometry("600x500")
         self.resizable(False, False)
 
-        # Variables
-        self.mode = tk.StringVar(value="convert")  # "convert" or "transcribe"
+        # Variables de estado
+        self.mode = tk.StringVar(value="transcribe")  # "convert" o "transcribe"
         self.process_folder = tk.BooleanVar(value=False)
+        self.use_mic = tk.BooleanVar(value=False)
+        self.recording = False
+        self.recorded_frames = []
+        self.stream = None
+
         self.input_path = tk.StringVar()
         self.output_path = tk.StringVar()
         self.ffmpeg_options = tk.StringVar(value="-y")
         self.output_ext = tk.StringVar(value=".mp3")
-        self.model = None  # whisper model
+
+        # Configuración de modelo Whisper
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        # compute_type: usar FP16 en GPU, FP32 en CPU
+        self.compute_type = "float16" if self.device == "cuda" else "float32"
+        self.model = None
 
         self._build_widgets()
         self._update_mode()
-        self._update_labels()
 
     def _build_widgets(self):
-        # Mode selection
+        # Operación
         tk.Label(self, text="Operación:").pack(anchor="w", pady=(10, 0), padx=10)
         frame_mode = tk.Frame(self)
         frame_mode.pack(fill="x", padx=10)
-        tk.Radiobutton(frame_mode, text="Convertir audio", variable=self.mode, value="convert",
-                       command=self._update_mode).pack(side="left")
         tk.Radiobutton(frame_mode, text="Transcribir audio", variable=self.mode, value="transcribe",
                        command=self._update_mode).pack(side="left")
+        tk.Radiobutton(frame_mode, text="Convertir audio", variable=self.mode, value="convert",
+                       command=self._update_mode).pack(side="left")
 
-        # Folder processing toggle
+        # Procesar carpeta
         tk.Checkbutton(self, text="Procesar carpeta", variable=self.process_folder,
-                       command=self._update_labels).pack(anchor="w", pady=(10, 0), padx=10)
+                       command=self._update_mode).pack(anchor="w", pady=(10, 0), padx=10)
+        # Usar micrófono
+        tk.Checkbutton(self, text="Usar micrófono", variable=self.use_mic,
+                       command=self._update_mode).pack(anchor="w", pady=(5, 0), padx=10)
 
-        # Input selection
-        self.input_label = tk.Label(self, text="")
+        # Etiquetas y entradas
+        self.input_label = tk.Label(self, text="Archivo de entrada:")
         self.input_label.pack(anchor="w", pady=(10, 0), padx=10)
         frame_in = tk.Frame(self)
         frame_in.pack(fill="x", padx=10)
-        tk.Entry(frame_in, textvariable=self.input_path, state="readonly").pack(side="left", fill="x", expand=True)
-        tk.Button(frame_in, text="Seleccionar...", command=self.select_input).pack(side="right")
+        self.entry_input = tk.Entry(frame_in, textvariable=self.input_path, state="readonly")
+        self.entry_input.pack(side="left", fill="x", expand=True)
+        self.btn_select_input = tk.Button(frame_in, text="Seleccionar...", command=self.select_input)
+        self.btn_select_input.pack(side="right")
 
-        # Output selection
-        self.output_label = tk.Label(self, text="")
+        self.output_label = tk.Label(self, text="Archivo de salida:")
         self.output_label.pack(anchor="w", pady=(10, 0), padx=10)
         frame_out = tk.Frame(self)
         frame_out.pack(fill="x", padx=10)
-        tk.Entry(frame_out, textvariable=self.output_path, state="readonly").pack(side="left", fill="x", expand=True)
-        tk.Button(frame_out, text="Seleccionar...", command=self.select_output).pack(side="right")
+        self.entry_output = tk.Entry(frame_out, textvariable=self.output_path, state="readonly")
+        self.entry_output.pack(side="left", fill="x", expand=True)
+        self.btn_select_output = tk.Button(frame_out, text="Seleccionar...", command=self.select_output)
+        self.btn_select_output.pack(side="right")
 
-        # Output extension (only for conversion folder)
-        self.ext_label = tk.Label(self, text="Extensión de salida (solo para conversión de carpeta):")
+        # Extensión y opciones FFmpeg (solo en conversión)
+        self.ext_label = tk.Label(self, text="Extensión de salida (solo carpeta):")
         self.ext_entry = tk.Entry(self, textvariable=self.output_ext)
-
-        # FFmpeg options (only for conversion)
         self.ffmpeg_label = tk.Label(self, text="Opciones adicionales de ffmpeg:")
         self.ffmpeg_entry = tk.Entry(self, textvariable=self.ffmpeg_options)
 
-        # Execute button
-        tk.Button(self, text="Ejecutar", command=self.convert_audio, bg="#4CAF50", fg="white").pack(pady=20)
+        # Área de texto para transcripciones
+        self.txt_output = tk.Text(self, height=8, state="disabled")
+        self.txt_output.pack(fill="both", padx=10, pady=(10, 0), expand=True)
+
+        # Progress bar de grabación
+        self.progressbar = ttk.Progressbar(self, mode='indeterminate')
+
+        # Botón principal
+        self.btn_execute = tk.Button(self, text="Ejecutar", command=self.toggle_action,
+                                     bg="#4CAF50", fg="white")
+        self.btn_execute.pack(pady=20)
 
     def _update_mode(self):
         mode = self.mode.get()
+        # Mostrar u ocultar config de conversión
         if mode == "convert":
             self.ext_label.pack(anchor="w", pady=(10, 0), padx=10)
             self.ext_entry.pack(fill="x", padx=10)
@@ -82,19 +111,29 @@ class AudioConverterApp(tk.Tk):
             self.ext_entry.pack_forget()
             self.ffmpeg_label.pack_forget()
             self.ffmpeg_entry.pack_forget()
-        self._update_labels()
 
-    def _update_labels(self):
-        mode = self.mode.get()
-        if self.process_folder.get():
-            self.input_label.config(text=("Carpeta de entrada:" if mode == "convert" else "Carpeta de audio:"))
-            self.output_label.config(text="Carpeta de salida:")
+        # Ajustar etiquetas y controles
+        if mode == "transcribe" and self.use_mic.get():
+            self.input_label.config(text="Grabación desde micrófono:")
+            self.btn_select_input.config(state="disabled")
+            self.btn_select_output.config(state="disabled")
+            self.btn_execute.config(text="Iniciar")
         else:
-            self.input_label.config(text="Archivo de entrada:")
-            self.output_label.config(
-                text=("Archivo de salida:" if mode == "convert" else "Archivo de texto de salida:"))
+            # habilitar selección
+            self.btn_select_input.config(state="normal")
+            self.btn_select_output.config(state="normal")
+            # texto botón
+            self.btn_execute.config(text="Ejecutar")
+            # etiquetas rutas
+            if self.process_folder.get():
+                self.input_label.config(text=("Carpeta de entrada:" if mode == "convert" else "Carpeta de audio:"))
+                self.output_label.config(text="Carpeta de salida:")
+            else:
+                self.input_label.config(text="Archivo de entrada:")
+                self.output_label.config(text=("Archivo de salida:" if mode == "convert" else "Archivo de texto de salida:"))
 
     def select_input(self):
+        if self.mode.get()=="transcribe" and self.use_mic.get(): return
         if self.process_folder.get():
             path = filedialog.askdirectory(title="Selecciona la carpeta de entrada")
         else:
@@ -103,10 +142,10 @@ class AudioConverterApp(tk.Tk):
                 filetypes=[("Audio files", "*.opus *.mp3 *.wav *.aac *.flac *.m4a *.webm *.ogg *.amr *.mp4"),
                            ("All files", "*.*")]
             )
-        if path:
-            self.input_path.set(path)
+        if path: self.input_path.set(path)
 
     def select_output(self):
+        if self.mode.get()=="transcribe" and self.use_mic.get(): return
         if self.process_folder.get():
             path = filedialog.askdirectory(title="Selecciona la carpeta de salida")
         else:
@@ -122,10 +161,75 @@ class AudioConverterApp(tk.Tk):
                     defaultextension=".txt",
                     filetypes=[("Text", "*.txt"), ("All files", "*.*")]
                 )
-        if path:
-            self.output_path.set(path)
+        if path: self.output_path.set(path)
 
-    def convert_audio(self):
+    def toggle_action(self):
+        # Decide entre grabar o procesar archivos
+        if self.mode.get()=="transcribe" and self.use_mic.get():
+            if not self.recording:
+                self.start_recording()
+            else:
+                self.stop_recording_and_process()
+        else:
+            self.process_files()
+
+    def audio_callback(self, indata, frames, time, status):
+        if status:
+            print(status)
+        # almacenar copia de datos
+        self.recorded_frames.append(indata.copy())
+
+    def start_recording(self):
+        try:
+            fs = 16000
+            self.recorded_frames = []
+            self.stream = sd.InputStream(samplerate=fs, channels=1, dtype='int16', callback=self.audio_callback)
+            self.stream.start()
+            self.recording = True
+            self.btn_execute.config(text="Detener")
+            # animación de grabación
+            self.progressbar.pack(fill='x', padx=10)
+            self.progressbar.start(10)
+        except Exception as e:
+            messagebox.showerror("Error de grabación", str(e))
+
+    def stop_recording_and_process(self):
+        try:
+            # detener grabación
+            self.stream.stop()
+            self.stream.close()
+            self.recording = False
+            self.btn_execute.config(text="Iniciar")
+            self.progressbar.stop()
+            self.progressbar.pack_forget()
+
+            # combinar frames y guardar WAV temporal
+            audio_data = np.concatenate(self.recorded_frames, axis=0)
+            with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+                wavfile.write(tmp.name, 16000, audio_data)
+                audio_path = tmp.name
+
+            # cargar modelo si es necesario
+            if whisper is None:
+                messagebox.showerror("Error", "El paquete 'whisper' no está instalado.")
+                return
+            if self.model is None:
+                self.model = whisper.load_model("base", device=self.device, compute_type=self.compute_type)
+
+            # transcribir
+            result = self.model.transcribe(audio_path)
+            text = result.get("text", "")
+
+            # mostrar en UI
+            self.txt_output.config(state="normal")
+            self.txt_output.delete("1.0", "end")
+            self.txt_output.insert("1.0", text)
+            self.txt_output.config(state="disabled")
+            messagebox.showinfo("Éxito", "Transcripción completada desde micrófono.")
+        except Exception as e:
+            messagebox.showerror("Error de procesamiento", str(e))
+
+    def process_files(self):
         mode = self.mode.get()
         in_path = self.input_path.get()
         out_path = self.output_path.get()
@@ -140,14 +244,11 @@ class AudioConverterApp(tk.Tk):
             messagebox.showerror("Error", "El paquete 'whisper' no está instalado.")
             return
 
-        # Supported audio extensions for folder processing
         audio_exts = (".mp3", ".wav", ".m4a", ".mp4", ".mpeg", ".mpga", ".opus", ".flac", ".webm", ".ogg", ".amr")
 
         if mode == "transcribe":
             if self.model is None:
-                self.model = whisper.load_model("base")
-
-            # Process folder
+                self.model = whisper.load_model("base", device=self.device, compute_type=self.compute_type)
             if self.process_folder.get():
                 if not os.path.isdir(in_path) or not os.path.isdir(out_path):
                     messagebox.showerror("Error", "Carpeta de entrada/salida inválida.")
@@ -167,8 +268,6 @@ class AudioConverterApp(tk.Tk):
                             messagebox.showerror("Error de transcripción", f"No se pudo procesar '{src}':\n{e}")
                             return
                 messagebox.showinfo("Éxito", f"Transcripción de carpeta completada:\n{out_path}")
-
-            # Single file
             else:
                 if not os.path.isfile(in_path):
                     messagebox.showerror("Error", "Archivo de entrada no existe.")
@@ -182,9 +281,7 @@ class AudioConverterApp(tk.Tk):
                     messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
                 except Exception as e:
                     messagebox.showerror("Error de transcripción", f"No se pudo procesar el archivo:\n{e}")
-
         else:
-            # Conversion logic
             if self.process_folder.get():
                 if not os.path.isdir(in_path) or not os.path.isdir(out_path):
                     messagebox.showerror("Error", "Carpeta de entrada/salida inválida.")
@@ -213,7 +310,6 @@ class AudioConverterApp(tk.Tk):
                     messagebox.showinfo("Éxito", f"Conversión completada:\n{out_path}")
                 except subprocess.CalledProcessError as e:
                     messagebox.showerror("Error de ffmpeg", f"Ocurrió un error:\n{e}")
-
 
 if __name__ == "__main__":
     app = AudioConverterApp()
