@@ -15,6 +15,15 @@ import scipy.io.wavfile as wavfile
 import numpy as np
 import torch
 
+import warnings
+
+warnings.filterwarnings(
+    "ignore",
+    message=r"Using a non-tuple sequence for multidimensional indexing.*",
+    category=UserWarning,
+)
+
+
 class AudioConverterApp(tk.Tk):
     def __init__(self):
         super().__init__()
@@ -128,10 +137,11 @@ class AudioConverterApp(tk.Tk):
                 self.output_label.config(text="Carpeta de salida:")
             else:
                 self.input_label.config(text="Archivo de entrada:")
-                self.output_label.config(text=("Archivo de salida:" if mode == "convert" else "Archivo de texto de salida:"))
+                self.output_label.config(
+                    text=("Archivo de salida:" if mode == "convert" else "Archivo de texto de salida:"))
 
     def select_input(self):
-        if self.mode.get()=="transcribe" and self.use_mic.get(): return
+        if self.mode.get() == "transcribe" and self.use_mic.get(): return
         if self.process_folder.get():
             path = filedialog.askdirectory(title="Selecciona la carpeta de entrada")
         else:
@@ -143,7 +153,7 @@ class AudioConverterApp(tk.Tk):
         if path: self.input_path.set(path)
 
     def select_output(self):
-        if self.mode.get()=="transcribe" and self.use_mic.get(): return
+        if self.mode.get() == "transcribe" and self.use_mic.get(): return
         if self.process_folder.get():
             path = filedialog.askdirectory(title="Selecciona la carpeta de salida")
         else:
@@ -163,7 +173,7 @@ class AudioConverterApp(tk.Tk):
 
     def toggle_action(self):
         # Decide entre grabar o procesar archivos
-        if self.mode.get()=="transcribe" and self.use_mic.get():
+        if self.mode.get() == "transcribe" and self.use_mic.get():
             if not self.recording:
                 self.start_recording()
             else:
@@ -210,9 +220,6 @@ class AudioConverterApp(tk.Tk):
             if self.model is None:
                 # Carga en GPU o CPU según disponibilidad
                 self.model = whisper.load_model("base", device=self.device)
-                # Si usamos GPU, pasar a half precision para aprovechar memoria
-                if self.device == "cuda":
-                    self.model.model.half()
 
             result = self.model.transcribe(audio_path)
             text = result.get("text", "")
@@ -228,13 +235,20 @@ class AudioConverterApp(tk.Tk):
     def process_files(self):
         mode = self.mode.get()
         in_path = self.input_path.get()
-        out_path = self.output_path.get()
+        out_path = self.output_path.get().strip()
         options = self.ffmpeg_options.get().split()
         ext = self.output_ext.get().strip()
 
-        if not in_path or not out_path:
-            messagebox.showerror("Error", "Selecciona rutas de entrada y salida.")
+        # Validar rutas: en transcripción de un único archivo, permitimos out_path vacío
+        if not in_path:
+            messagebox.showerror("Error", "Selecciona ruta de entrada.")
             return
+
+        if mode != "transcribe" or self.process_folder.get():
+            # para conversión o carpetas, sí exigimos out_path
+            if not out_path:
+                messagebox.showerror("Error", "Selecciona ruta de salida.")
+                return
 
         if mode == "transcribe" and whisper is None:
             messagebox.showerror("Error", "El paquete 'whisper' no está instalado.")
@@ -245,8 +259,6 @@ class AudioConverterApp(tk.Tk):
         if mode == "transcribe":
             if self.model is None:
                 self.model = whisper.load_model("base", device=self.device)
-                if self.device == "cuda":
-                    self.model.model.half()
             if self.process_folder.get():
                 if not os.path.isdir(in_path) or not os.path.isdir(out_path):
                     messagebox.showerror("Error", "Carpeta de entrada/salida inválida.")
@@ -267,16 +279,27 @@ class AudioConverterApp(tk.Tk):
                             return
                 messagebox.showinfo("Éxito", f"Transcripción de carpeta completada:\n{out_path}")
             else:
+
                 if not os.path.isfile(in_path):
                     messagebox.showerror("Error", "Archivo de entrada no existe.")
                     return
-                base = os.path.splitext(os.path.basename(in_path))[0]
-                dest = out_path if out_path.lower().endswith(".txt") else out_path + ".txt"
                 try:
                     res = self.model.transcribe(in_path)
-                    with open(dest, "w", encoding="utf-8") as f:
-                        f.write(res.get("text", ""))
-                    messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
+                    text = res.get("text", "")
+                    if out_path:
+                        # si el usuario indicó ruta, la guardamos en disco
+                        dest = out_path if out_path.lower().endswith(".txt") else out_path + ".txt"
+
+                        with open(dest, "w", encoding="utf-8") as f:
+                            f.write(text)
+                            messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
+                    else:
+                        # sin ruta, volcar al textarea
+                        self.txt_output.config(state="normal")
+                        self.txt_output.delete("1.0", "end")
+                        self.txt_output.insert("1.0", text)
+                        self.txt_output.config(state="disabled")
+                        messagebox.showinfo("Éxito", "Transcripción completada en pantalla.")
                 except Exception as e:
                     messagebox.showerror("Error de transcripción", f"No se pudo procesar el archivo:\n{e}")
         else:
@@ -308,6 +331,7 @@ class AudioConverterApp(tk.Tk):
                     messagebox.showinfo("Éxito", f"Conversión completada:\n{out_path}")
                 except subprocess.CalledProcessError as e:
                     messagebox.showerror("Error de ffmpeg", f"Ocurrió un error:\n{e}")
+
 
 if __name__ == "__main__":
     app = AudioConverterApp()
