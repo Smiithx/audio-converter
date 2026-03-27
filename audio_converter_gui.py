@@ -14,15 +14,61 @@ import sounddevice as sd
 import scipy.io.wavfile as wavfile
 import numpy as np
 import torch
+import argparse
+import sys
 
 import warnings
 
-warnings.filterwarnings(
-    "ignore",
-    message=r"Using a non-tuple sequence for multidimensional indexing.*",
-    category=UserWarning,
-)
+# --- Lógica de Procesamiento ---
 
+class AudioProcessor:
+    def __init__(self):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.model = None
+
+    def _ensure_model(self):
+        if self.model is None:
+            if whisper is None:
+                raise ImportError("El paquete 'whisper' no está instalado.")
+            self.model = whisper.load_model("base", device=self.device)
+
+    def transcribe(self, audio_path):
+        self._ensure_model()
+        result = self.model.transcribe(audio_path)
+        return result.get("text", "")
+
+    def convert(self, in_path, out_path, options=None):
+        if options is None:
+            options = ["-y"]
+        cmd = ["ffmpeg"] + options + ["-i", in_path, out_path]
+        subprocess.run(cmd, check=True)
+
+    def process_folder(self, mode, in_dir, out_dir, options=None, output_ext=".mp3"):
+        audio_exts = (".mp3", ".wav", ".m4a", ".mp4", ".mpeg", ".mpga", ".opus", ".flac", ".webm", ".ogg", ".amr")
+        if not os.path.isdir(in_dir) or not os.path.isdir(out_dir):
+            raise ValueError("Carpeta de entrada/salida inválida.")
+
+        results = []
+        for root, _, files in os.walk(in_dir):
+            for file in files:
+                if not file.lower().endswith(audio_exts):
+                    continue
+                src = os.path.join(root, file)
+                base = os.path.splitext(os.path.basename(file))[0]
+                
+                if mode == "transcribe":
+                    dest = os.path.join(out_dir, base + ".txt")
+                    text = self.transcribe(src)
+                    with open(dest, "w", encoding="utf-8") as f:
+                        f.write(text)
+                    results.append(dest)
+                else:
+                    dest = os.path.join(out_dir, base + output_ext)
+                    self.convert(src, dest, options)
+                    results.append(dest)
+        return results
+
+# --- Interfaz Gráfica ---
 
 class AudioConverterApp(tk.Tk):
     def __init__(self):
@@ -45,8 +91,7 @@ class AudioConverterApp(tk.Tk):
         self.output_ext = tk.StringVar(value=".mp3")
 
         # Configuración de dispositivo para Whisper
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = None
+        self.processor = AudioProcessor()
 
         self._build_widgets()
         self._update_mode()
@@ -214,21 +259,16 @@ class AudioConverterApp(tk.Tk):
                 wavfile.write(tmp.name, 16000, audio_data)
                 audio_path = tmp.name
 
-            if whisper is None:
-                messagebox.showerror("Error", "El paquete 'whisper' no está instalado.")
-                return
-            if self.model is None:
-                # Carga en GPU o CPU según disponibilidad
-                self.model = whisper.load_model("base", device=self.device)
-
-            result = self.model.transcribe(audio_path)
-            text = result.get("text", "")
+            text = self.processor.transcribe(audio_path)
 
             self.txt_output.config(state="normal")
             self.txt_output.delete("1.0", "end")
             self.txt_output.insert("1.0", text)
             self.txt_output.config(state="disabled")
             messagebox.showinfo("Éxito", "Transcripción completada desde micrófono.")
+            
+            if os.path.exists(audio_path):
+                os.remove(audio_path)
         except Exception as e:
             messagebox.showerror("Error de procesamiento", str(e))
 
@@ -239,100 +279,79 @@ class AudioConverterApp(tk.Tk):
         options = self.ffmpeg_options.get().split()
         ext = self.output_ext.get().strip()
 
-        # Validar rutas: en transcripción de un único archivo, permitimos out_path vacío
         if not in_path:
             messagebox.showerror("Error", "Selecciona ruta de entrada.")
             return
 
         if mode != "transcribe" or self.process_folder.get():
-            # para conversión o carpetas, sí exigimos out_path
             if not out_path:
                 messagebox.showerror("Error", "Selecciona ruta de salida.")
                 return
 
-        if mode == "transcribe" and whisper is None:
-            messagebox.showerror("Error", "El paquete 'whisper' no está instalado.")
-            return
-
-        audio_exts = (".mp3", ".wav", ".m4a", ".mp4", ".mpeg", ".mpga", ".opus", ".flac", ".webm", ".ogg", ".amr")
-
-        if mode == "transcribe":
-            if self.model is None:
-                self.model = whisper.load_model("base", device=self.device)
+        try:
             if self.process_folder.get():
-                if not os.path.isdir(in_path) or not os.path.isdir(out_path):
-                    messagebox.showerror("Error", "Carpeta de entrada/salida inválida.")
-                    return
-                for root, _, files in os.walk(in_path):
-                    for file in files:
-                        if not file.lower().endswith(audio_exts):
-                            continue
-                        src = os.path.join(root, file)
-                        base = os.path.splitext(file)[0]
-                        dest = os.path.join(out_path, base + ".txt")
-                        try:
-                            res = self.model.transcribe(src)
-                            with open(dest, "w", encoding="utf-8") as f:
-                                f.write(res.get("text", ""))
-                        except Exception as e:
-                            messagebox.showerror("Error de transcripción", f"No se pudo procesar '{src}':\n{e}")
-                            return
-                messagebox.showinfo("Éxito", f"Transcripción de carpeta completada:\n{out_path}")
+                self.processor.process_folder(mode, in_path, out_path, options, ext)
+                messagebox.showinfo("Éxito", f"Procesamiento de carpeta completado:\n{out_path}")
             else:
-
-                if not os.path.isfile(in_path):
-                    messagebox.showerror("Error", "Archivo de entrada no existe.")
-                    return
-                try:
-                    res = self.model.transcribe(in_path)
-                    text = res.get("text", "")
+                if mode == "transcribe":
+                    text = self.processor.transcribe(in_path)
                     if out_path:
-                        # si el usuario indicó ruta, la guardamos en disco
                         dest = out_path if out_path.lower().endswith(".txt") else out_path + ".txt"
-
                         with open(dest, "w", encoding="utf-8") as f:
                             f.write(text)
-                            messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
+                        messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
                     else:
-                        # sin ruta, volcar al textarea
                         self.txt_output.config(state="normal")
                         self.txt_output.delete("1.0", "end")
                         self.txt_output.insert("1.0", text)
                         self.txt_output.config(state="disabled")
                         messagebox.showinfo("Éxito", "Transcripción completada en pantalla.")
-                except Exception as e:
-                    messagebox.showerror("Error de transcripción", f"No se pudo procesar el archivo:\n{e}")
-        else:
-            if self.process_folder.get():
-                if not os.path.isdir(in_path) or not os.path.isdir(out_path):
-                    messagebox.showerror("Error", "Carpeta de entrada/salida inválida.")
-                    return
-                for root, _, files in os.walk(in_path):
-                    for file in files:
-                        if not file.lower().endswith(audio_exts):
-                            continue
-                        src = os.path.join(root, file)
-                        base = os.path.splitext(os.path.basename(file))[0]
-                        dest = os.path.join(out_path, base + ext)
-                        cmd = ["ffmpeg"] + options + ["-i", src, dest]
-                        try:
-                            subprocess.run(cmd, check=True)
-                        except subprocess.CalledProcessError as e:
-                            messagebox.showerror("Error de ffmpeg", f"Error al convertir '{src}':\n{e}")
-                            return
-                messagebox.showinfo("Éxito", f"Conversión de carpeta completada:\n{out_path}")
-            else:
-                if not os.path.isfile(in_path):
-                    messagebox.showerror("Error", "Archivo de entrada no existe.")
-                    return
-                cmd = ["ffmpeg"] + options + ["-i", in_path, out_path]
-                try:
-                    subprocess.run(cmd, check=True)
+                else:
+                    self.processor.convert(in_path, out_path, options)
                     messagebox.showinfo("Éxito", f"Conversión completada:\n{out_path}")
-                except subprocess.CalledProcessError as e:
-                    messagebox.showerror("Error de ffmpeg", f"Ocurrió un error:\n{e}")
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
 
 
 if __name__ == "__main__":
-    app = AudioConverterApp()
-    app.mainloop()
+    parser = argparse.ArgumentParser(description="Audio Converter & Transcriber")
+    parser.add_argument("--mode", choices=["convert", "transcribe"], help="Modo de operación")
+    parser.add_argument("--input", help="Ruta de archivo o carpeta de entrada")
+    parser.add_argument("--output", help="Ruta de archivo o carpeta de salida")
+    parser.add_argument("--folder", action="store_true", help="Procesar carpeta completa")
+    parser.add_argument("--options", default="-y", help="Opciones adicionales para ffmpeg (ej. '-b:a 192k')")
+    parser.add_argument("--ext", default=".mp3", help="Extensión de salida para conversión de carpetas")
+
+    args = parser.parse_args()
+
+    if args.mode:
+        # Modo CLI
+        processor = AudioProcessor()
+        try:
+            if args.folder:
+                print(f"Procesando carpeta: {args.input} -> {args.output}")
+                processor.process_folder(args.mode, args.input, args.output, args.options.split(), args.ext)
+            else:
+                if args.mode == "transcribe":
+                    print(f"Transcribiendo: {args.input}")
+                    text = processor.transcribe(args.input)
+                    if args.output:
+                        dest = args.output if args.output.lower().endswith(".txt") else args.output + ".txt"
+                        with open(dest, "w", encoding="utf-8") as f:
+                            f.write(text)
+                        print(f"Guardado en: {dest}")
+                    else:
+                        print("-" * 20)
+                        print(text)
+                        print("-" * 20)
+                else:
+                    print(f"Convirtiendo: {args.input} -> {args.output}")
+                    processor.convert(args.input, args.output, args.options.split())
+            print("Operación completada con éxito.")
+        except Exception as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+    else:
+        # Modo GUI
+        app = AudioConverterApp()
+        app.mainloop()

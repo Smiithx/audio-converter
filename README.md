@@ -51,18 +51,64 @@
 
 ## 🛠 Uso
 
-Inicia la aplicación con:
-
+### 🖥️ Interfaz Gráfica (GUI)
+Inicia la aplicación sin argumentos para abrir la ventana:
 ```bash
 python audio_converter_gui.py
 ```
 
 1. Elige entre **Convertir audio** o **Transcribir audio**.
-2. Activa la casilla **Procesar carpeta** si quieres aplicar la operación a todos los archivos dentro de una carpeta.
-3. Selecciona la ruta de entrada (archivo o carpeta).
-4. Selecciona la ruta de salida (archivo o carpeta).
-5. Configura opciones de FFmpeg (sólo en modo conversión) y la extensión de salida si es carpeta.
-6. Haz clic en **Ejecutar** y revisa los mensajes de éxito o error.
+2. Activa **Procesar carpeta** para operaciones por lotes.
+3. Selecciona rutas de entrada y salida.
+4. Haz clic en **Ejecutar**.
+
+### ⌨️ Línea de Comandos (CLI)
+La aplicación ahora soporta comandos de consola para automatización:
+
+**Transcripción:**
+```bash
+# Transcribir y mostrar en pantalla
+python audio_converter_gui.py --mode transcribe --input archivo.mp3
+
+# Transcribir y guardar en .txt
+python audio_converter_gui.py --mode transcribe --input archivo.mp3 --output resultado.txt
+
+# Transcribir carpeta completa
+python audio_converter_gui.py --mode transcribe --input ./audios --output ./textos --folder
+```
+
+**Conversión:**
+```bash
+# Convertir archivo
+python audio_converter_gui.py --mode convert --input cancion.wav --output cancion.mp3
+
+# Convertir archivo con opciones de bitrate
+python audio_converter_gui.py --mode convert --input input.wav --output output.mp3 --options "-b:a 192k"
+
+# Convertir carpeta completa a un formato específico
+python audio_converter_gui.py --mode convert --input ./wavs --output ./mp3s --folder --ext .mp3
+```
+
+**Ayuda:**
+```bash
+python audio_converter_gui.py --help
+```
+
+---
+
+## 📦 Crear Ejecutable para Windows (.exe)
+
+Para convertir esta aplicación en una app nativa de Windows que no requiera tener Python instalado globalmente:
+
+1. Instala PyInstaller:
+   ```bash
+   pip install pyinstaller
+   ```
+2. Ejecuta el script de construcción:
+   ```bash
+   python build_exe.py
+   ```
+3. El ejecutable se encontrará en la carpeta `dist/AudioConverterTranscriber.exe`.
 
 ---
 
