@@ -1,86 +1,30 @@
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
-import subprocess
 import os
 import tempfile
-
-try:
-    import whisper
-except ImportError:
-    whisper = None
-
-# Dependencias para grabación por micrófono
+import threading
+import numpy as np
 import sounddevice as sd
 import scipy.io.wavfile as wavfile
-import numpy as np
-import torch
-import argparse
-import sys
-
-import warnings
-
-# --- Lógica de Procesamiento ---
-
-class AudioProcessor:
-    def __init__(self):
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
-        self.model = None
-
-    def _ensure_model(self):
-        if self.model is None:
-            if whisper is None:
-                raise ImportError("El paquete 'whisper' no está instalado.")
-            self.model = whisper.load_model("base", device=self.device)
-
-    def transcribe(self, audio_path):
-        self._ensure_model()
-        result = self.model.transcribe(audio_path)
-        return result.get("text", "")
-
-    def convert(self, in_path, out_path, options=None):
-        if options is None:
-            options = ["-y"]
-        cmd = ["ffmpeg"] + options + ["-i", in_path, out_path]
-        subprocess.run(cmd, check=True)
-
-    def process_folder(self, mode, in_dir, out_dir, options=None, output_ext=".mp3"):
-        audio_exts = (".mp3", ".wav", ".m4a", ".mp4", ".mpeg", ".mpga", ".opus", ".flac", ".webm", ".ogg", ".amr")
-        if not os.path.isdir(in_dir) or not os.path.isdir(out_dir):
-            raise ValueError("Carpeta de entrada/salida inválida.")
-
-        results = []
-        for root, _, files in os.walk(in_dir):
-            for file in files:
-                if not file.lower().endswith(audio_exts):
-                    continue
-                src = os.path.join(root, file)
-                base = os.path.splitext(os.path.basename(file))[0]
-                
-                if mode == "transcribe":
-                    dest = os.path.join(out_dir, base + ".txt")
-                    text = self.transcribe(src)
-                    with open(dest, "w", encoding="utf-8") as f:
-                        f.write(text)
-                    results.append(dest)
-                else:
-                    dest = os.path.join(out_dir, base + output_ext)
-                    self.convert(src, dest, options)
-                    results.append(dest)
-        return results
-
-# --- Interfaz Gráfica ---
+from src.providers import WhisperTranscriber, FFmpegConverter, GeminiVideoAnalyzer
+from src.processor import MediaProcessor
 
 class AudioConverterApp(tk.Tk):
-    def __init__(self):
+    def __init__(self, google_api_key=""):
         super().__init__()
         self.title("Audio Converter & Transcriber")
-        self.geometry("600x500")
+        self.geometry("600x650")
         self.resizable(False, False)
 
+        # Cargar llaves desde entorno
+        self.api_key_paid = os.getenv("GOOGLE_API_KEY", "")
+        self.api_key_free = os.getenv("GOOGLE_API_KEY_FREE", "")
+
         # Variables de estado
-        self.mode = tk.StringVar(value="transcribe")  # "convert" o "transcribe"
+        self.mode = tk.StringVar(value="transcribe")
         self.process_folder = tk.BooleanVar(value=False)
         self.use_mic = tk.BooleanVar(value=False)
+        self.use_free_tier = tk.BooleanVar(value=True)
         self.recording = False
         self.recorded_frames = []
         self.stream = None
@@ -89,9 +33,22 @@ class AudioConverterApp(tk.Tk):
         self.output_path = tk.StringVar()
         self.ffmpeg_options = tk.StringVar(value="-y")
         self.output_ext = tk.StringVar(value=".mp3")
+        self.analysis_prompt = tk.StringVar(value="""Actúa como un analista técnico de software. Analiza el video de esta reunión.
+PRIMERA LÍNEA OBLIGATORIA: Escribe un título descriptivo y breve para el video en el formato: "SUGGESTED_FILENAME: [Nombre_Corto_Descriptivo]" (sin espacios, usa guiones bajos si es necesario).
 
-        # Configuración de dispositivo para Whisper
-        self.processor = AudioProcessor()
+Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplicando estas reglas estrictas:
+1. Registra las decisiones, requerimientos técnicos y bugs discutidos.
+2. Cuando se comparta pantalla, inserta la etiqueta [CONTEXTO VISUAL: <descripción detallada>].
+3. Si se muestra código (PHP, JavaScript, SQL) o infraestructura (AWS, Docker, terminales), transcribe los bloques o configuraciones exactas que aparecen en pantalla.
+4. Si se muestran diagramas de arquitectura o flujos de negocio (ej. procesos de ERP, contabilidad o facturación), describe cada paso visualizado.
+5. Omite saludos y conversaciones no relacionadas con el proyecto.""")
+
+        # Configuración de procesador con sus proveedores
+        self.processor = MediaProcessor(
+            transcriber=WhisperTranscriber(),
+            converter=FFmpegConverter(),
+            analyzer=GeminiVideoAnalyzer()
+        )
 
         self._build_widgets()
         self._update_mode()
@@ -105,13 +62,23 @@ class AudioConverterApp(tk.Tk):
                        command=self._update_mode).pack(side="left")
         tk.Radiobutton(frame_mode, text="Convertir audio", variable=self.mode, value="convert",
                        command=self._update_mode).pack(side="left")
+        tk.Radiobutton(frame_mode, text="Analizar Reunión (Video)", variable=self.mode, value="video_analysis",
+                       command=self._update_mode).pack(side="left")
 
         # Procesar carpeta
         tk.Checkbutton(self, text="Procesar carpeta", variable=self.process_folder,
                        command=self._update_mode).pack(anchor="w", pady=(10, 0), padx=10)
         # Usar micrófono
-        tk.Checkbutton(self, text="Usar micrófono", variable=self.use_mic,
-                       command=self._update_mode).pack(anchor="w", pady=(5, 0), padx=10)
+        self.chk_mic = tk.Checkbutton(self, text="Usar micrófono", variable=self.use_mic,
+                                      command=self._update_mode)
+        self.chk_mic.pack(anchor="w", pady=(5, 0), padx=10)
+
+        # Selector de capa gratuita para Gemini
+        self.chk_free_tier = tk.Checkbutton(self, text="Usar capa gratuita (Datos públicos)", variable=self.use_free_tier)
+        
+        self.gemini_prompt_label = tk.Label(self, text="Prompt de Análisis:")
+        self.gemini_prompt_entry = tk.Text(self, height=8)
+        self.gemini_prompt_entry.insert("1.0", self.analysis_prompt.get())
 
         # Etiquetas y entradas
         self.input_label = tk.Label(self, text="Archivo de entrada:")
@@ -138,7 +105,7 @@ class AudioConverterApp(tk.Tk):
         self.ffmpeg_label = tk.Label(self, text="Opciones adicionales de ffmpeg:")
         self.ffmpeg_entry = tk.Entry(self, textvariable=self.ffmpeg_options)
 
-        # Área de texto para transcripciones
+        # Área de texto para transcripciones / análisis
         self.txt_output = tk.Text(self, height=8, state="disabled")
         self.txt_output.pack(fill="both", padx=10, pady=(10, 0), expand=True)
 
@@ -152,7 +119,6 @@ class AudioConverterApp(tk.Tk):
 
     def _update_mode(self):
         mode = self.mode.get()
-        # Mostrar u ocultar config de conversión
         if mode == "convert":
             self.ext_label.pack(anchor="w", pady=(10, 0), padx=10)
             self.ext_entry.pack(fill="x", padx=10)
@@ -164,37 +130,49 @@ class AudioConverterApp(tk.Tk):
             self.ffmpeg_label.pack_forget()
             self.ffmpeg_entry.pack_forget()
 
-        # Ajustar etiquetas y controles
+        if mode == "video_analysis":
+            self.chk_free_tier.pack(anchor="w", pady=(10, 0), padx=10)
+            self.gemini_prompt_label.pack(anchor="w", pady=(10, 0), padx=10)
+            self.gemini_prompt_entry.pack(fill="x", padx=10)
+            self.chk_mic.pack_forget()
+            self.use_mic.set(False)
+        else:
+            self.chk_free_tier.pack_forget()
+            self.gemini_prompt_label.pack_forget()
+            self.gemini_prompt_entry.pack_forget()
+            self.chk_mic.pack(anchor="w", pady=(5, 0), padx=10)
+
         if mode == "transcribe" and self.use_mic.get():
             self.input_label.config(text="Grabación desde micrófono:")
             self.btn_select_input.config(state="disabled")
             self.btn_select_output.config(state="disabled")
             self.btn_execute.config(text="Iniciar")
         else:
-            # habilitar selección
             self.btn_select_input.config(state="normal")
             self.btn_select_output.config(state="normal")
-            # texto botón
             self.btn_execute.config(text="Ejecutar")
-            # etiquetas rutas
             if self.process_folder.get():
-                self.input_label.config(text=("Carpeta de entrada:" if mode == "convert" else "Carpeta de audio:"))
+                self.input_label.config(text=("Carpeta de entrada:" if mode != "transcribe" else "Carpeta de audio:"))
                 self.output_label.config(text="Carpeta de salida:")
             else:
                 self.input_label.config(text="Archivo de entrada:")
-                self.output_label.config(
-                    text=("Archivo de salida:" if mode == "convert" else "Archivo de texto de salida:"))
+                if mode == "convert":
+                    self.output_label.config(text="Archivo de salida:")
+                elif mode == "video_analysis":
+                    self.output_label.config(text="Archivo de reporte (.txt):")
+                else:
+                    self.output_label.config(text="Archivo de texto de salida:")
 
     def select_input(self):
         if self.mode.get() == "transcribe" and self.use_mic.get(): return
         if self.process_folder.get():
             path = filedialog.askdirectory(title="Selecciona la carpeta de entrada")
         else:
-            path = filedialog.askopenfilename(
-                title="Selecciona el archivo de entrada",
-                filetypes=[("Audio files", "*.opus *.mp3 *.wav *.aac *.flac *.m4a *.webm *.ogg *.amr *.mp4"),
-                           ("All files", "*.*")]
-            )
+            if self.mode.get() == "video_analysis":
+                ftypes = [("Video files", "*.mp4 *.mpeg *.mov *.avi *.wmv *.webm *.flv"), ("All files", "*.*")]
+            else:
+                ftypes = [("Audio files", "*.opus *.mp3 *.wav *.aac *.flac *.m4a *.webm *.ogg *.amr *.mp4"), ("All files", "*.*")]
+            path = filedialog.askopenfilename(title="Selecciona el archivo de entrada", filetypes=ftypes)
         if path: self.input_path.set(path)
 
     def select_output(self):
@@ -217,7 +195,6 @@ class AudioConverterApp(tk.Tk):
         if path: self.output_path.set(path)
 
     def toggle_action(self):
-        # Decide entre grabar o procesar archivos
         if self.mode.get() == "transcribe" and self.use_mic.get():
             if not self.recording:
                 self.start_recording()
@@ -253,18 +230,13 @@ class AudioConverterApp(tk.Tk):
             self.progressbar.stop()
             self.progressbar.pack_forget()
 
-            # Guardar WAV temporal
             audio_data = np.concatenate(self.recorded_frames, axis=0)
             with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
                 wavfile.write(tmp.name, 16000, audio_data)
                 audio_path = tmp.name
 
             text = self.processor.transcribe(audio_path)
-
-            self.txt_output.config(state="normal")
-            self.txt_output.delete("1.0", "end")
-            self.txt_output.insert("1.0", text)
-            self.txt_output.config(state="disabled")
+            self._display_text(text)
             messagebox.showinfo("Éxito", "Transcripción completada desde micrófono.")
             
             if os.path.exists(audio_path):
@@ -272,26 +244,63 @@ class AudioConverterApp(tk.Tk):
         except Exception as e:
             messagebox.showerror("Error de procesamiento", str(e))
 
+    def _display_text(self, text):
+        self.txt_output.config(state="normal")
+        self.txt_output.delete("1.0", "end")
+        self.txt_output.insert("1.0", text)
+        self.txt_output.config(state="disabled")
+        self.txt_output.see("end")
+
+    def _log_to_gui(self, message):
+        def _append():
+            self.txt_output.config(state="normal")
+            self.txt_output.insert("end", f"{message}\n")
+            self.txt_output.config(state="disabled")
+            self.txt_output.see("end")
+        self.after(0, _append)
+
     def process_files(self):
         mode = self.mode.get()
         in_path = self.input_path.get()
         out_path = self.output_path.get().strip()
-        options = self.ffmpeg_options.get().split()
-        ext = self.output_ext.get().strip()
+        api_key = self.api_key_free if self.use_free_tier.get() else self.api_key_paid
 
         if not in_path:
             messagebox.showerror("Error", "Selecciona ruta de entrada.")
             return
 
-        if mode != "transcribe" or self.process_folder.get():
+        if mode == "video_analysis" and not api_key:
+            messagebox.showerror("Error", "La API Key de Google (Gratuita o Pago) no está configurada en las variables de entorno.")
+            return
+
+        if (mode != "transcribe" and mode != "video_analysis") or self.process_folder.get():
             if not out_path:
                 messagebox.showerror("Error", "Selecciona ruta de salida.")
                 return
 
+        # Deshabilitar UI e iniciar hilo
+        self.btn_execute.config(state="disabled")
+        self.txt_output.config(state="normal")
+        self.txt_output.delete("1.0", "end")
+        self.txt_output.config(state="disabled")
+        
+        thread = threading.Thread(target=self._process_thread)
+        thread.daemon = True
+        thread.start()
+
+    def _process_thread(self):
+        mode = self.mode.get()
+        in_path = self.input_path.get()
+        out_path = self.output_path.get().strip()
+        options = self.ffmpeg_options.get().split()
+        ext = self.output_ext.get().strip()
+        api_key = self.api_key_free if self.use_free_tier.get() else self.api_key_paid
+        prompt = self.gemini_prompt_entry.get("1.0", "end-1c").strip()
+
         try:
             if self.process_folder.get():
-                self.processor.process_folder(mode, in_path, out_path, options, ext)
-                messagebox.showinfo("Éxito", f"Procesamiento de carpeta completado:\n{out_path}")
+                results = self.processor.process_folder(mode, in_path, out_path, options, ext, api_key, prompt, callback=self._log_to_gui)
+                self.after(0, lambda: messagebox.showinfo("Éxito", f"Procesamiento de carpeta completado:\n{out_path}"))
             else:
                 if mode == "transcribe":
                     text = self.processor.transcribe(in_path)
@@ -299,59 +308,41 @@ class AudioConverterApp(tk.Tk):
                         dest = out_path if out_path.lower().endswith(".txt") else out_path + ".txt"
                         with open(dest, "w", encoding="utf-8") as f:
                             f.write(text)
-                        messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}")
+                        self.after(0, lambda: messagebox.showinfo("Éxito", f"Transcripción completada:\n{dest}"))
                     else:
-                        self.txt_output.config(state="normal")
-                        self.txt_output.delete("1.0", "end")
-                        self.txt_output.insert("1.0", text)
-                        self.txt_output.config(state="disabled")
-                        messagebox.showinfo("Éxito", "Transcripción completada en pantalla.")
-                else:
-                    self.processor.convert(in_path, out_path, options)
-                    messagebox.showinfo("Éxito", f"Conversión completada:\n{out_path}")
-        except Exception as e:
-            messagebox.showerror("Error", str(e))
+                        self.after(0, lambda: self._display_text(text))
+                        self.after(0, lambda: messagebox.showinfo("Éxito", "Transcripción completada en pantalla."))
+                elif mode == "video_analysis":
+                    text = self.processor.analyze_video(in_path, api_key, prompt, callback=self._log_to_gui)
+                    
+                    # Intentar extraer el nombre sugerido
+                    suggested_base = os.path.splitext(os.path.basename(in_path))[0]
+                    if text.startswith("SUGGESTED_FILENAME:"):
+                        import re
+                        linea_nombre = text.split("\n", 1)[0]
+                        nombre_extraido = linea_nombre.replace("SUGGESTED_FILENAME:", "").strip()
+                        nombre_limpio = re.sub(r'[<>:"/\\|?*]', "", nombre_extraido)
+                        if nombre_limpio:
+                            suggested_base = nombre_limpio
 
-
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Audio Converter & Transcriber")
-    parser.add_argument("--mode", choices=["convert", "transcribe"], help="Modo de operación")
-    parser.add_argument("--input", help="Ruta de archivo o carpeta de entrada")
-    parser.add_argument("--output", help="Ruta de archivo o carpeta de salida")
-    parser.add_argument("--folder", action="store_true", help="Procesar carpeta completa")
-    parser.add_argument("--options", default="-y", help="Opciones adicionales para ffmpeg (ej. '-b:a 192k')")
-    parser.add_argument("--ext", default=".mp3", help="Extensión de salida para conversión de carpetas")
-
-    args = parser.parse_args()
-
-    if args.mode:
-        # Modo CLI
-        processor = AudioProcessor()
-        try:
-            if args.folder:
-                print(f"Procesando carpeta: {args.input} -> {args.output}")
-                processor.process_folder(args.mode, args.input, args.output, args.options.split(), args.ext)
-            else:
-                if args.mode == "transcribe":
-                    print(f"Transcribiendo: {args.input}")
-                    text = processor.transcribe(args.input)
-                    if args.output:
-                        dest = args.output if args.output.lower().endswith(".txt") else args.output + ".txt"
+                    if out_path:
+                        # Si es una carpeta, usar el nombre sugerido. Si es un archivo, respetar la elección pero quizás sugerir cambiarlo (aunque aquí simplemente guardamos).
+                        if os.path.isdir(out_path):
+                            dest = os.path.join(out_path, suggested_base + ".md")
+                        else:
+                            # Si out_path ya es un archivo completo, lo usamos, pero aseguramos la extensión .md
+                            dest = out_path if out_path.lower().endswith(".md") else out_path + ".md"
+                        
                         with open(dest, "w", encoding="utf-8") as f:
                             f.write(text)
-                        print(f"Guardado en: {dest}")
+                        self.after(0, lambda d=dest: messagebox.showinfo("Éxito", f"Análisis completado:\n{d}"))
                     else:
-                        print("-" * 20)
-                        print(text)
-                        print("-" * 20)
+                        self.after(0, lambda: self._display_text(text))
+                        self.after(0, lambda: messagebox.showinfo("Éxito", "Análisis completado en pantalla."))
                 else:
-                    print(f"Convirtiendo: {args.input} -> {args.output}")
-                    processor.convert(args.input, args.output, args.options.split())
-            print("Operación completada con éxito.")
+                    self.processor.convert(in_path, out_path, options)
+                    self.after(0, lambda: messagebox.showinfo("Éxito", f"Conversión completada:\n{out_path}"))
         except Exception as e:
-            print(f"Error: {e}")
-            sys.exit(1)
-    else:
-        # Modo GUI
-        app = AudioConverterApp()
-        app.mainloop()
+            self.after(0, lambda: messagebox.showerror("Error", str(e)))
+        finally:
+            self.after(0, lambda: self.btn_execute.config(state="normal"))

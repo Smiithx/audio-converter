@@ -19,5 +19,11 @@ scipy~=1.15.3
 # Modelo Whisper
 openai-whisper @ git+https://github.com/openai/whisper.git#egg=openai-whisper
 
+# Google Generative AI para análisis de video
+google-genai
+
+# Gestión de variables de entorno
+python-dotenv
+
 # Herramientas de testing
 pytest
