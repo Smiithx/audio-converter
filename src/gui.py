@@ -9,6 +9,7 @@ import scipy.io.wavfile as wavfile
 from src.providers import WhisperTranscriber, FFmpegConverter, GeminiVideoAnalyzer
 from src.processor import MediaProcessor
 
+
 class AudioConverterApp(tk.Tk):
     def __init__(self, google_api_key=""):
         super().__init__()
@@ -33,15 +34,38 @@ class AudioConverterApp(tk.Tk):
         self.output_path = tk.StringVar()
         self.ffmpeg_options = tk.StringVar(value="-y")
         self.output_ext = tk.StringVar(value=".mp3")
-        self.analysis_prompt = tk.StringVar(value="""Actúa como un analista técnico de software. Analiza el video de esta reunión.
-PRIMERA LÍNEA OBLIGATORIA: Escribe un título descriptivo y breve para el video en el formato: "SUGGESTED_FILENAME: [Nombre_Corto_Descriptivo]" (sin espacios, usa guiones bajos si es necesario).
+        self.analysis_prompt = tk.StringVar(value="""
+Actúa como un Arquitecto de Software y Analista Técnico Funcional Senior. Analiza el video de esta reunión y extrae toda la información técnica y de negocio. 
 
-Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplicando estas reglas estrictas:
-1. Registra las decisiones, requerimientos técnicos y bugs discutidos.
-2. Cuando se comparta pantalla, inserta la etiqueta [CONTEXTO VISUAL: <descripción detallada>].
-3. Si se muestra código (PHP, JavaScript, SQL) o infraestructura (AWS, Docker, terminales), transcribe los bloques o configuraciones exactas que aparecen en pantalla.
-4. Si se muestran diagramas de arquitectura o flujos de negocio (ej. procesos de ERP, contabilidad o facturación), describe cada paso visualizado.
-5. Omite saludos y conversaciones no relacionadas con el proyecto.""")
+Genera tu respuesta estrictamente con la siguiente estructura:
+
+**1. PRIMERA LÍNEA OBLIGATORIA**
+SUGGESTED_FILENAME: [Nombre_Corto_Descriptivo_Separado_Por_Guiones_Bajos]
+
+**2. ANÁLISIS FUNCIONAL (Módulos y Formularios)**
+Por cada módulo, pantalla o formulario discutido o mostrado, documenta:
+* **Nombre del Módulo/Formulario.**
+* **Propósito:** ¿Para qué sirve dentro del sistema?
+* **Funcionamiento:** Explicación paso a paso de su flujo de uso.
+* **Campos y Validaciones:** Inputs requeridos, reglas de negocio y outputs esperados.
+
+**3. ARQUITECTURA DE DATOS (Modelos de Base de Datos)**
+A partir de la conversación o de lo mostrado en pantalla (código, consultas SQL, interfaces), identifica y lista:
+* **Entidades/Modelos:** Nombre de las tablas o colecciones.
+* **Campos:** Lista de atributos identificados para cada modelo, infiriendo su tipo de dato (String, Int, Boolean, Foreign Key) si es posible.
+* **Relaciones:** Conexiones mencionadas entre diferentes entidades.
+
+**4. REGISTRO CRONOLÓGICO TÉCNICO**
+Genera una bitácora con marcas de tiempo (ej.), aplicando estas reglas estrictas:
+* Omite saludos y conversaciones no relacionadas con el proyecto.
+* Registra decisiones arquitectónicas, requerimientos técnicos y bugs discutidos.
+* Cuando se comparta pantalla, inserta la etiqueta **[CONTEXTO VISUAL: <descripción detallada>]**.
+* Si se muestra código (PHP, JavaScript, SQL, etc.) o infraestructura (AWS, Docker, terminales), transcribe o reconstruye los bloques exactos dentro de bloques de código markdown.
+* Si se muestran diagramas de arquitectura o flujos de negocio (ej. ERP, facturación), describe cada paso visualizado.
+
+**5. INSTRUCCIONES Y PRÓXIMOS PASOS (Action Items)**
+* **Instrucciones de configuración/despliegue:** Si se explicaron pasos para ejecutar o probar algo, lístalos como un mini-tutorial.
+* **Tareas:** Lista de pendientes técnicos (To-Dos), requerimientos nuevos y responsables (si se mencionan).""")
 
         # Configuración de procesador con sus proveedores
         self.processor = MediaProcessor(
@@ -74,8 +98,9 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
         self.chk_mic.pack(anchor="w", pady=(5, 0), padx=10)
 
         # Selector de capa gratuita para Gemini
-        self.chk_free_tier = tk.Checkbutton(self, text="Usar capa gratuita (Datos públicos)", variable=self.use_free_tier)
-        
+        self.chk_free_tier = tk.Checkbutton(self, text="Usar capa gratuita (Datos públicos)",
+                                            variable=self.use_free_tier)
+
         self.gemini_prompt_label = tk.Label(self, text="Prompt de Análisis:")
         self.gemini_prompt_entry = tk.Text(self, height=8)
         self.gemini_prompt_entry.insert("1.0", self.analysis_prompt.get())
@@ -171,7 +196,8 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
             if self.mode.get() == "video_analysis":
                 ftypes = [("Video files", "*.mp4 *.mpeg *.mov *.avi *.wmv *.webm *.flv"), ("All files", "*.*")]
             else:
-                ftypes = [("Audio files", "*.opus *.mp3 *.wav *.aac *.flac *.m4a *.webm *.ogg *.amr *.mp4"), ("All files", "*.*")]
+                ftypes = [("Audio files", "*.opus *.mp3 *.wav *.aac *.flac *.m4a *.webm *.ogg *.amr *.mp4"),
+                          ("All files", "*.*")]
             path = filedialog.askopenfilename(title="Selecciona el archivo de entrada", filetypes=ftypes)
         if path: self.input_path.set(path)
 
@@ -238,7 +264,7 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
             text = self.processor.transcribe(audio_path)
             self._display_text(text)
             messagebox.showinfo("Éxito", "Transcripción completada desde micrófono.")
-            
+
             if os.path.exists(audio_path):
                 os.remove(audio_path)
         except Exception as e:
@@ -257,6 +283,7 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
             self.txt_output.insert("end", f"{message}\n")
             self.txt_output.config(state="disabled")
             self.txt_output.see("end")
+
         self.after(0, _append)
 
     def process_files(self):
@@ -270,7 +297,8 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
             return
 
         if mode == "video_analysis" and not api_key:
-            messagebox.showerror("Error", "La API Key de Google (Gratuita o Pago) no está configurada en las variables de entorno.")
+            messagebox.showerror("Error",
+                                 "La API Key de Google (Gratuita o Pago) no está configurada en las variables de entorno.")
             return
 
         if (mode != "transcribe" and mode != "video_analysis") or self.process_folder.get():
@@ -283,7 +311,7 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
         self.txt_output.config(state="normal")
         self.txt_output.delete("1.0", "end")
         self.txt_output.config(state="disabled")
-        
+
         thread = threading.Thread(target=self._process_thread)
         thread.daemon = True
         thread.start()
@@ -299,7 +327,8 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
 
         try:
             if self.process_folder.get():
-                results = self.processor.process_folder(mode, in_path, out_path, options, ext, api_key, prompt, callback=self._log_to_gui)
+                results = self.processor.process_folder(mode, in_path, out_path, options, ext, api_key, prompt,
+                                                        callback=self._log_to_gui)
                 self.after(0, lambda: messagebox.showinfo("Éxito", f"Procesamiento de carpeta completado:\n{out_path}"))
             else:
                 if mode == "transcribe":
@@ -314,7 +343,7 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
                         self.after(0, lambda: messagebox.showinfo("Éxito", "Transcripción completada en pantalla."))
                 elif mode == "video_analysis":
                     text = self.processor.analyze_video(in_path, api_key, prompt, callback=self._log_to_gui)
-                    
+
                     # Intentar extraer el nombre sugerido
                     suggested_base = os.path.splitext(os.path.basename(in_path))[0]
                     if text.startswith("SUGGESTED_FILENAME:"):
@@ -332,7 +361,7 @@ Genera una transcripción cronológica con marcas de tiempo (ej. [14:30]), aplic
                         else:
                             # Si out_path ya es un archivo completo, lo usamos, pero aseguramos la extensión .md
                             dest = out_path if out_path.lower().endswith(".md") else out_path + ".md"
-                        
+
                         with open(dest, "w", encoding="utf-8") as f:
                             f.write(text)
                         self.after(0, lambda d=dest: messagebox.showinfo("Éxito", f"Análisis completado:\n{d}"))
