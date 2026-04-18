@@ -55,17 +55,17 @@ class MediaProcessor:
                 # El método analyze_video de MediaProcessor ya maneja la obtención del modelo del entorno si se pasa None
                 text = self.analyze_video(src, api_key, prompt, callback=callback)
                 
-                # Intentar extraer el nombre sugerido de la primera línea: SUGGESTED_FILENAME: [Nombre]
+                # Try to extract the suggested name from the first line: SUGGESTED_FILENAME: [Name]
                 suggested_base = base
                 if text.startswith("SUGGESTED_FILENAME:"):
-                    linea_nombre = text.split("\n", 1)[0]
-                    nombre_extraido = linea_nombre.replace("SUGGESTED_FILENAME:", "").strip()
-                    if nombre_extraido:
-                        # Limpiar caracteres inválidos para Windows y asegurar que no tenga espacios extra
+                    name_line = text.split("\n", 1)[0]
+                    extracted_name = name_line.replace("SUGGESTED_FILENAME:", "").strip()
+                    if extracted_name:
+                        # Remove invalid characters for Windows filenames
                         import re
-                        nombre_limpio = re.sub(r'[<>:"/\\|?*]', "", nombre_extraido)
-                        if nombre_limpio:
-                            suggested_base = nombre_limpio
+                        sanitized_name = re.sub(r'[<>:"/\\|?*]', "", extracted_name)
+                        if sanitized_name:
+                            suggested_base = sanitized_name
                 
                 dest = os.path.join(out_dir, suggested_base + ".md")
                 with open(dest, "w", encoding="utf-8") as f:

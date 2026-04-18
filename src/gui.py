@@ -344,15 +344,15 @@ Genera una bitácora con marcas de tiempo (ej.), aplicando estas reglas estricta
                 elif mode == "video_analysis":
                     text = self.processor.analyze_video(in_path, api_key, prompt, callback=self._log_to_gui)
 
-                    # Intentar extraer el nombre sugerido
+                    # Try to extract the suggested filename
                     suggested_base = os.path.splitext(os.path.basename(in_path))[0]
                     if text.startswith("SUGGESTED_FILENAME:"):
                         import re
-                        linea_nombre = text.split("\n", 1)[0]
-                        nombre_extraido = linea_nombre.replace("SUGGESTED_FILENAME:", "").strip()
-                        nombre_limpio = re.sub(r'[<>:"/\\|?*]', "", nombre_extraido)
-                        if nombre_limpio:
-                            suggested_base = nombre_limpio
+                        name_line = text.split("\n", 1)[0]
+                        extracted_name = name_line.replace("SUGGESTED_FILENAME:", "").strip()
+                        sanitized_name = re.sub(r'[<>:"/\\|?*]', "", extracted_name)
+                        if sanitized_name:
+                            suggested_base = sanitized_name
 
                     if out_path:
                         # Si es una carpeta, usar el nombre sugerido. Si es un archivo, respetar la elección pero quizás sugerir cambiarlo (aunque aquí simplemente guardamos).

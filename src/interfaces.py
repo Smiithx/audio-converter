@@ -12,5 +12,5 @@ class ConverterProvider(ABC):
 
 class VideoAnalyzerProvider(ABC):
     @abstractmethod
-    def analyze_video(self, video_path, api_key, prompt, model_name="gemini-1.5-flash", callback=None):
+    def analyze_video(self, video_path, api_key, prompt, model_name="gemini-3.1-flash-lite-preview", callback=None):
         pass
